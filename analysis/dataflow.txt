@@ -1,0 +1,310 @@
+FFmpeg h.264 Slice Counter Vulnerability - Dataflow Diagram
+===========================================================
+
+DATAFLOW FROM SOURCE TO SINK
+=============================
+
+File: ffmpeg-vul-core/analysis/dataflow.txt
+Description: Traces untrusted h.264 input through vulnerable code path to OOB access
+
+
+ENTRY POINT
+-----------
+
+[1] Untrusted Input: H.264 Video File (bitstream)
+    |
+    +-- Location: Network stream, local file, or memory buffer
+    +-- Format: H.264 NAL unit stream
+    +-- User Controlled: YES
+    +-- Validation: MISSING in vulnerable version
+
+
+PARSING STAGE
+=============
+
+[2] parse_slices_vulnerable()
+    |
+    +-- Function: Slice extraction and buffer allocation
+    +-- File: src/h264_parse.c
+    +-- Input: uint8_t *bitstream (untrusted)
+    |
+    v
+
+
+[3] extract_slice_count()
+    |
+    +-- Operation: Read 4 bytes from bitstream
+    +-- Code:
+        slice_count = (bitstream[0] << 24) |
+                      (bitstream[1] << 16) |
+                      (bitstream[2] << 8) |
+                      (bitstream[3]);
+    |
+    +-- Result: 32-bit integer
+    +-- Validation: NONE
+    +-- Potential Value: 0x00000000 to 0xFFFFFFFF
+    |
+    v
+
+
+VULNERABLE COMPUTATION
+======================
+
+[4] Buffer Size Calculation
+    |
+    +-- Operation: Multiply slice_count * ENTRY_SIZE
+    +-- Code:
+        uint32_t entry_size = 16;
+        size_t buffer_size = slice_count * entry_size;
+    |
+    +-- Issue: Integer Overflow Possible
+    |
+    +-- Example with slice_count = 0x40000000:
+    |       0x40000000 * 16
+    |       = 0x400000000 (68GB on 64-bit)
+    |       = 0x0 (on 32-bit due to modulo 2^32)
+    |
+    +-- Result: buffer_size = 0 or very small value
+    |
+    v
+
+
+MEMORY ALLOCATION
+=================
+
+[5] av_malloc(buffer_size)
+    |
+    +-- Function: Memory allocation
+    +-- Input: buffer_size (computed from untrusted input)
+    +-- Vulnerable State:
+    |       - Expected size: 68GB
+    |       - Allocated size: 0 bytes (or small value due to overflow)
+    |
+    +-- Return: Pointer to undersized memory block
+    |
+    v
+
+
+UNSAFE WRITE LOOP
+=================
+
+[6] Slice Data Write Loop
+    |
+    +-- Code:
+        for (uint32_t i = 0; i < slice_count; i++) {
+            SliceInfo *slice = &buffer[i];
+            // Write slice data
+            slice->id = ...;
+            slice->pos = ...;
+            slice->size = ...;
+            slice->type = ...;
+        }
+    |
+    +-- Issue: Array access without bounds checking
+    +-- Loop Iterations: slice_count (from untrusted input)
+    +-- Array Size: Undersized buffer (due to overflow in [4])
+    |
+    v
+
+
+OUT-OF-BOUNDS ACCESS
+====================
+
+[7] buffer[i] Access
+    |
+    +-- Calculation: offset = i * sizeof(SliceInfo)
+    +-- Expected: offset < buffer_size for all i < slice_count
+    +-- Actual (vulnerable): offset >= buffer_size for i >= threshold
+    |
+    +-- Example with slice_count = 0x40000000, actual_alloc = 256MB:
+    |       i = 0:          offset = 0x0       ✓ SAFE
+    |       i = 1000:       offset = 0x4000    ✓ SAFE
+    |       i = 16777216:   offset = 0x100000000 (256MB in bytes) ✗ OOB
+    |       i = 33554432:   offset = 0x200000000 ✗ OOB
+    |
+    v
+
+
+HEAP CORRUPTION
+===============
+
+[8] Memory Violation
+    |
+    +-- Type: Heap Buffer Overflow (CWE-787)
+    +-- Location: buffer[i] where i >= buffer_capacity/entry_size
+    +-- Effect:
+    |       - Write to unallocated heap memory
+    |       - Corrupt adjacent heap blocks
+    |       - Corrupt heap metadata
+    |       - Potential vtable/pointer corruption
+    |
+    v
+
+
+EXPLOITATION SCENARIOS
+======================
+
+Scenario A: INFORMATION DISCLOSURE
+    heap corruption [8] -> read corrupted metadata -> leak pointer -> ASLR bypass
+
+Scenario B: DENIAL OF SERVICE
+    heap corruption [8] -> corrupt allocator metadata -> crash in malloc/free -> DoS
+
+Scenario C: CODE EXECUTION (Complex)
+    heap corruption [8] -> corrupt function pointer -> call arbitrary function -> RCE
+
+
+DETECTION POINTS
+================
+
+Static Analysis:
+    1. [3] Unchecked read from bitstream
+    2. [4] Integer multiplication without overflow check
+    3. [6] Loop with user-controlled limit
+    4. [7] Array access without bounds validation
+
+Dynamic Analysis:
+    1. [5] AddressSanitizer: heap-buffer-overflow detected
+    2. [8] Memory write detected beyond allocation boundary
+
+
+PATCHED DATAFLOW
+================
+
+MODIFIED STEP [3]: Validation Added
+    [3a] validate_slice_count()
+         |
+         +-- Check: if (slice_count > MAX_SLICES) return ERROR
+         +-- Result: Reject oversized input at entry
+         |
+         v
+
+MODIFIED STEP [4]: Overflow Check Added
+    [4a] check_multiplication_overflow()
+         |
+         +-- Check: if (slice_count > SIZE_MAX / entry_size) return ERROR
+         +-- Result: Prevent multiplication overflow
+         |
+         v
+
+MODIFIED STEP [6]: Bounds Check Added
+    [6a] Within loop:
+         if (offset + entry_size > buffer_size) return ERROR
+         |
+         +-- Result: Prevent OOB access before write
+         |
+         v
+
+RESULT: All malicious inputs rejected before [5] (allocation)
+        No heap corruption possible
+
+
+TAINT ANALYSIS
+==============
+
+Taint Source: [1] bitstream (untrusted)
+    |
+    v
+    [3] slice_count (TAINTED)
+    |
+    v
+    [4] buffer_size (TAINTED)
+    |
+    v
+    [5] av_malloc result (TAINTED SIZE)
+    |
+    v
+    [6] Loop limit in for (TAINTED)
+    |
+    v
+    [7] buffer[i] access (TAINTED INDEX)
+    |
+    v
+    [8] Memory write (UNSAFE - TAINTED SIZE + TAINTED INDEX)
+
+Taint Sink: [8] Heap memory write operation
+
+
+DATA DEPENDENCY CHAIN
+=====================
+
+untrusted_bitstream [1]
+    |
+    +-- depends_on: bitstream[0..3]
+    |
+    v
+slice_count [3]
+    |
+    +-- depends_on: untrusted_bitstream
+    |
+    v
+buffer_size [4]
+    |
+    +-- depends_on: slice_count
+    |
+    v
+allocated_buffer [5]
+    |
+    +-- depends_on: buffer_size
+    |
+    v
+loop_limit [6]
+    |
+    +-- depends_on: slice_count
+    |
+    v
+write_location [7]
+    |
+    +-- depends_on: loop_limit, allocated_buffer
+    |
+    v
+heap_corruption [8]
+    |
+    +-- depends_on: write_location exceeding allocated_buffer
+
+
+EXECUTION TRACE EXAMPLE
+=======================
+
+Input: h264_file with malicious slice_count = 0x40000000
+
+[1] Load bitstream
+    bitstream = [0x40, 0x00, 0x00, 0x00, ...]
+
+[3] Parse slice_count
+    slice_count = 0x40000000 (1GB)
+    printf: "slice_count = %u", slice_count)
+
+[4] Calculate buffer_size
+    buffer_size = 0x40000000 * 16
+    On 32-bit: buffer_size = 0 (overflow)
+    On 64-bit: buffer_size = 0x400000000 (16GB)
+    printf: "buffer_size = %zu", buffer_size)
+
+[5] Allocate memory
+    buffer = av_malloc(buffer_size)
+    On 32-bit: allocated ~0 bytes (heap allocator behavior varies)
+    On 64-bit: might fail or allocate huge page (depends on system)
+
+[6] Start loop
+    for (i = 0; i < 0x40000000; i++) {
+
+[7] First iterations OK (within allocated memory)
+        i = 0:   offset = 0x0         → buffer[0] ✓
+        i = 1:   offset = 0x10        → buffer[1] ✓
+        i = 256: offset = 0x1000      → buffer[256] ✓
+
+[8] Later iterations OOB
+        i = 1000000:   offset = 0xF4240   ← May exceed allocated
+        printf: "WARNING: Writing beyond buffer"
+
+[8] FINAL: Heap corruption detected by ASan or system crash
+
+
+END OF DATAFLOW ANALYSIS
+========================
+
+Date: 2026-10-06
+Status: Complete
+Vulnerability: CWE-787 (OOB Write)
+Impact: Critical (CVSS 9.1)

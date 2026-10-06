@@ -1,0 +1,37 @@
+# Build artifacts
+*.o
+*.a
+*.so
+*.exe
+build/
+dist/
+out/
+
+# Compiled binaries
+exploit
+vulnerable_test
+patched_test
+
+# Generated files
+*.swp
+*.swo
+*~
+.DS_Store
+tags
+cscope.out
+TAGS
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.sublime-project
+*.sublime-workspace
+
+# Logs
+*.log
+
+# Test artifacts
+test_output/
+coverage/
+.gcov/
