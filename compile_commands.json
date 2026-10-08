@@ -1,0 +1,104 @@
+[
+  {
+    "directory": ".",
+    "file": "poc/exploit.c",
+    "arguments": [
+      "clang",
+      "-c",
+      "-I",
+      ".",
+      "-I",
+      "poc",
+      "-I",
+      "src",
+      "-I",
+      "tests",
+      "poc/exploit.c"
+    ]
+  },
+  {
+    "directory": ".",
+    "file": "src/buffer_overflow.c",
+    "arguments": [
+      "clang",
+      "-c",
+      "-I",
+      ".",
+      "-I",
+      "poc",
+      "-I",
+      "src",
+      "-I",
+      "tests",
+      "src/buffer_overflow.c"
+    ]
+  },
+  {
+    "directory": ".",
+    "file": "src/h264_parse.c",
+    "arguments": [
+      "clang",
+      "-c",
+      "-I",
+      ".",
+      "-I",
+      "poc",
+      "-I",
+      "src",
+      "-I",
+      "tests",
+      "src/h264_parse.c"
+    ]
+  },
+  {
+    "directory": ".",
+    "file": "src/slice_buffer.c",
+    "arguments": [
+      "clang",
+      "-c",
+      "-I",
+      ".",
+      "-I",
+      "poc",
+      "-I",
+      "src",
+      "-I",
+      "tests",
+      "src/slice_buffer.c"
+    ]
+  },
+  {
+    "directory": ".",
+    "file": "tests/patched.c",
+    "arguments": [
+      "clang",
+      "-c",
+      "-I",
+      ".",
+      "-I",
+      "poc",
+      "-I",
+      "src",
+      "-I",
+      "tests",
+      "tests/patched.c"
+    ]
+  },
+  {
+    "directory": ".",
+    "file": "tests/vulnerable.c",
+    "arguments": [
+      "clang",
+      "-c",
+      "-I",
+      ".",
+      "-I",
+      "poc",
+      "-I",
+      "src",
+      "-I",
+      "tests",
+      "tests/vulnerable.c"
+    ]
+  }
+]
